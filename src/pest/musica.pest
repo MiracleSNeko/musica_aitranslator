@@ -1,0 +1,76 @@
+//! PEST file for extracting text from the musica (Minori) engine scripts.
+//!
+//! @author     musica-aitraslator-dev@msneko.icu
+//! @version    0.1.0
+//! @since      2024-08-05
+//! @license    MIT && Apache-2.0
+
+/// Silent built-in rules
+ASCII_PRINTABLE                       = _{ '\u{0021}'..'\u{007E}' }
+CJ_CHARACTERS                         = _{
+    HAN
+  | HIRAGANA
+  | KATAKANA
+  | CJ_HALF_FULL_WIDTH
+  | "\u{30FC}" // \u{30FC}(Katakana-Hiragana Prolonged Sound Mark) missed in pest built-in KATAKANA rule
+}
+CJ_PUNCTUATION                        = _{
+    PUNCTUATION
+}
+CJ_HALF_FULL_WIDTH                    = _{
+    '\u{FF01}'..'\u{FFEF}' // All, Halfwidth and Fullwidth Forms Block
+}
+CJ_SEPARATOR                          = _{
+    SEPARATOR
+  | "\u{0009}" // Character Tabulation, Segment Separator
+
+  | "\u{000B}" // Line Tabulation, Segment Separator
+
+  | "\u{001F}" // Information Separator One, Segment Separator
+
+  | "\u{3000}" // Ideographic Space, CJK Symbols and Punctuation
+}
+CJ_LEFT_CORNER_BRACKET                = _{
+    "\u{300C}" // Left Corner Bracket, CJK Symbols and Punctuation
+
+  | "\u{FF62}" // Halfwidth Left Corner Bracket, Halfwidth and Fullwidth Forms
+}
+CJ_RIGHT_CORNER_BRACKET               = _{
+    "\u{300D}" // Right Corner Bracket, CJK Symbols and Punctuation
+
+  | "\u{FF63}" // Halfwidth Right Corner Bracket, Halfwidth and Fullwidth Forms
+}
+CJ_PUNCTUATION_WITHOUT_CORNER_BRACKET = _{
+    !CJ_LEFT_CORNER_BRACKET ~ !CJ_RIGHT_CORNER_BRACKET ~ CJ_PUNCTUATION
+}
+
+/// Silent Musica keywords rules
+// MUSICA_COMMENT = _{ ";" | "；" | ":" | "："}
+MUSICA_COMMAND = _{ "." }
+MUSICA_PREPROC = _{ "#" }
+MUSICA_COMMENT = _{ !MUSICA_COMMAND ~ !MUSICA_PREPROC ~ !NEWLINE ~ ANY }
+
+/// ;comment rule
+IComment = { MUSICA_COMMENT ~ (!NEWLINE ~ ANY)* }
+
+/// #include rule
+IInclude = { MUSICA_PREPROC ~ "include" ~ (!NEWLINE ~ ANY)+ }
+
+/// .message rule
+IMessage        = { MUSICA_COMMAND ~ "message" ~ CJ_SEPARATOR+ ~ MessageNumber ~ CJ_SEPARATOR+ ~ (MessageSpeakerTachie ~ CJ_SEPARATOR+)? ~ (IMessageNamed | IMessageUnnamed) }
+IMessageNamed   = { MessageSpeakerName ~ CJ_SEPARATOR+ ~ CJ_LEFT_CORNER_BRACKET ~ MessageContentQuoted ~ CJ_RIGHT_CORNER_BRACKET }
+IMessageUnnamed = { MessageContentUnquoted }
+
+/// .message atoms
+MessageNumber          = @{ ASCII_DIGIT+ }
+MessageSpeakerName     = @{ "@"? ~ CJ_CHARACTERS ~ ((CJ_SEPARATOR ~ CJ_CHARACTERS) | CJ_CHARACTERS{2, 5})? }
+MessageSpeakerTachie  = @{ ASCII_ALPHA+ ~ "-" ~ ASCII_DIGIT+ ~ "-" ~ ASCII_DIGIT+ }
+MessageContentUnquoted = @{ (CJ_CHARACTERS | CJ_PUNCTUATION | CJ_SEPARATOR | ASCII_PRINTABLE)+ }
+MessageContentQuoted   = @{ (CJ_CHARACTERS | CJ_PUNCTUATION_WITHOUT_CORNER_BRACKET | CJ_SEPARATOR | ASCII_PRINTABLE)+ }
+
+/// non .message rule for text extraction
+INonMessage = { MUSICA_COMMAND ~ !"message" ~ (!NEWLINE ~ ANY)+ }
+
+/// main rule for Musica
+IMusicaScript = _{ (IComment | IInclude | IMessage | INonMessage) ~ NEWLINE* }
+Musica        =  { SOI ~ IMusicaScript* ~ EOI }
