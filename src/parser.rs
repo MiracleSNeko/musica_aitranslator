@@ -149,7 +149,7 @@ impl MusicaParse for IMessageNamed {
             builder = builder.combine(segment)?;
         }
 
-        Ok(None)
+        Ok(Some(builder.into()))
     }
 }
 

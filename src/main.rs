@@ -1,7 +1,7 @@
 use anyhow::Result as AnyResult;
 use apalis::{
     layers::WorkerBuilderExt,
-    prelude::{Monitor, Storage, WorkerBuilder, WorkerFactory, WorkerFactoryFn},
+    prelude::{Monitor, Storage, WorkerBuilder, WorkerFactoryFn},
 };
 use apalis_sql::sqlite::{SqlitePool, SqliteStorage};
 use lazy_static::lazy_static;
@@ -26,7 +26,6 @@ use crate::{
     },
     parser::*,
     storage::text_segment::create_db_connection,
-    utils::IntoAnyResult,
 };
 
 lazy_static! {
