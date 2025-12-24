@@ -16,7 +16,6 @@ mod jobs;
 mod parser;
 mod storage;
 mod translator;
-mod trustme;
 mod utils;
 
 use crate::{
