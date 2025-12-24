@@ -1663,6 +1663,7 @@ dependencies = [
  "dotenv",
  "enum_dispatch",
  "enum_dispatch_pest_parser",
+ "futures",
  "if_chain",
  "kv",
  "lazy_static",

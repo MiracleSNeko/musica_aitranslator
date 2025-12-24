@@ -1,36 +1,23 @@
 use crate::{
-    jobs::{self, DispatchJob, DispatchJobQueue, ParserJob, ParserJobQueue},
+    jobs::{DispatchJob, DispatchJobQueue, ParserJob},
     storage::text_segment::{
         self, InsertModel as TextSegment, InsertModelBuilder as TextSegmentBuilder,
     },
-    trustme,
     utils::IntoAnyResult,
 };
 use anyhow::{Context, Result as AnyResult, bail};
-use apalis::prelude::{Attempt, Context as WorkerContext, Data, Storage, TaskId, Worker};
-use apalis_sql::{
-    context::SqlContext,
-    sqlite::{SqlitePool, SqliteStorage},
-};
-use async_recursion::async_recursion;
+use apalis::prelude::{Data, Storage};
 use auto_context::auto_context as anyhow_context;
 use enum_dispatch::enum_dispatch;
 use enum_dispatch_pest_parser::pest_parser;
+use futures::executor::block_on;
 use pest::{
     Parser,
     iterators::{Pair, Pairs},
 };
 use sea_orm::{ActiveModelTrait, DatabaseConnection, IntoActiveModel};
-use serde_json::{Value as Json, json};
-use std::{
-    fs::{File, read_to_string},
-    io::Write,
-    path::PathBuf,
-    pin::Pin,
-    sync::Arc,
-};
+use std::{fs::read_to_string, path::PathBuf, sync::Arc};
 use tokio::sync::RwLock;
-use walkdir::{DirEntry, WalkDir};
 
 #[pest_parser(grammar = "./src/pest/musica.pest", interface = "MusicaParse")]
 pub struct MusicaParser;
@@ -38,42 +25,29 @@ pub struct MusicaParser;
 #[allow(unused)]
 type ParserResult<T> = AnyResult<T>;
 #[allow(unused)]
-type ParserAst = Pairs<'static, Rule>;
+type ParserAst<'a> = Pairs<'a, Rule>;
 #[allow(unused)]
-type ParserAstNode = Pair<'static, Rule>;
+type ParserAstNode<'a> = Pair<'a, Rule>;
+#[allow(unused)]
+type StaticParserAst = Pairs<'static, Rule>;
+#[allow(unused)]
+type StaticParserAstNode = Pair<'static, Rule>;
 
 #[allow(unused)]
 #[enum_dispatch]
 pub trait MusicaParse {
-    // async_recursion will transform the signature like this:
-    // ```rust
-    // #[async_recursion(?Send)]
-    // async fn function(&self, t: T) -> R;
-    //
-    // // becomes:
-    // #[must_use]
-    // fn function<'life_self, 'async_recursion>(
-    //      &'life_self self,
-    //      t: T
-    // ) -> Pin<Box<dyn Future<Output = R> + 'async_recursion>>
-    // where
-    //     'life_self: 'async_recursion;
-    // ```
-    fn parse<'life_self, 'async_recursion>(
-        &'life_self self,
+    fn parse(
+        &self,
         node: ParserAstNode,
         line: i32,
         db: Arc<DatabaseConnection>,
-    ) -> Pin<Box<dyn Future<Output = ParserResult<Option<TextSegmentBuilder>>> + 'async_recursion>>
-    where
-        'life_self: 'async_recursion;
+    ) -> ParserResult<Option<TextSegmentBuilder>>;
 }
 
 macro_rules! non_message_node {
     ($t: ty) => {
         impl MusicaParse for $t {
-            #[async_recursion(?Send)]
-            async fn parse(
+            fn parse(
                 &self,
                 node: ParserAstNode,
                 line: i32,
@@ -83,10 +57,11 @@ macro_rules! non_message_node {
                     .line(line)
                     .content(node.as_str())
                     .build()?;
-                TextSegment::INonMessage(model)
-                    .into_active_model()
-                    .insert(db.as_ref())
-                    .await?;
+                block_on(
+                    TextSegment::INonMessage(model)
+                        .into_active_model()
+                        .insert(db.as_ref()),
+                )?;
                 Ok(None)
             }
         }
@@ -96,8 +71,7 @@ macro_rules! non_message_node {
 macro_rules! silent_node {
     ($t: ty) => {
         impl MusicaParse for $t {
-            #[async_recursion(?Send)]
-            async fn parse(
+            fn parse(
                 &self,
                 _: ParserAstNode,
                 _: i32,
@@ -136,8 +110,7 @@ non_message_node!(IInclude);
 
 // .message rule
 impl MusicaParse for IMessage {
-    #[async_recursion(?Send)]
-    async fn parse(
+    fn parse(
         &self,
         node: ParserAstNode,
         line: i32,
@@ -146,16 +119,14 @@ impl MusicaParse for IMessage {
         // IMessage ONLY contains ONE IMessageNamed or IMessageUnnamed
         if let Some(node) = node.into_inner().next() {
             let rule = node.as_rule();
-            let builder = rule
-                .parse(node, line, db.clone())
-                .await?
-                .into_any_result()?;
+            let builder = rule.parse(node, line, db.clone())?.into_any_result()?;
             if let TextSegmentBuilder::IMessage(builder) = builder {
                 let message = builder.build()?;
-                TextSegment::IMessage(message)
-                    .into_active_model()
-                    .insert(db.as_ref())
-                    .await?;
+                block_on(
+                    TextSegment::IMessage(message)
+                        .into_active_model()
+                        .insert(db.as_ref()),
+                )?;
             } else {
                 bail!("Expected IMessageBuilder, found INonMessageBuilder");
             }
@@ -165,8 +136,7 @@ impl MusicaParse for IMessage {
 }
 
 impl MusicaParse for IMessageNamed {
-    #[async_recursion(?Send)]
-    async fn parse<'a>(
+    fn parse(
         &self,
         node: ParserAstNode,
         line: i32,
@@ -175,20 +145,16 @@ impl MusicaParse for IMessageNamed {
         let mut builder = TextSegmentBuilder::new_message().line(line);
         for node in node.into_inner() {
             let rule = node.as_rule();
-            let segment = rule
-                .parse(node, line, db.clone())
-                .await?
-                .into_any_result()?;
+            let segment = rule.parse(node, line, db.clone())?.into_any_result()?;
             builder = builder.combine(segment)?;
         }
 
-        Ok(Some(builder.into()))
+        Ok(None)
     }
 }
 
 impl MusicaParse for IMessageUnnamed {
-    #[async_recursion(?Send)]
-    async fn parse(
+    fn parse(
         &self,
         node: ParserAstNode,
         line: i32,
@@ -197,10 +163,7 @@ impl MusicaParse for IMessageUnnamed {
         let mut builder = TextSegmentBuilder::new_message().line(line);
         for node in node.into_inner() {
             let rule = node.as_rule();
-            let segment = rule
-                .parse(node, line, db.clone())
-                .await?
-                .into_any_result()?;
+            let segment = rule.parse(node, line, db.clone())?.into_any_result()?;
             builder = builder.combine(segment)?;
         }
 
@@ -210,8 +173,7 @@ impl MusicaParse for IMessageUnnamed {
 
 // .message atoms
 impl MusicaParse for MessageNumber {
-    #[async_recursion(?Send)]
-    async fn parse(
+    fn parse(
         &self,
         node: ParserAstNode,
         _line: i32,
@@ -226,8 +188,7 @@ impl MusicaParse for MessageNumber {
 }
 
 impl MusicaParse for MessageSpeakerName {
-    #[async_recursion(?Send)]
-    async fn parse(
+    fn parse(
         &self,
         node: ParserAstNode,
         _line: i32,
@@ -240,8 +201,7 @@ impl MusicaParse for MessageSpeakerName {
 }
 
 impl MusicaParse for MessageSpeakerTachie {
-    #[async_recursion(?Send)]
-    async fn parse(
+    fn parse(
         &self,
         node: ParserAstNode,
         _line: i32,
@@ -256,8 +216,7 @@ impl MusicaParse for MessageSpeakerTachie {
 }
 
 impl MusicaParse for MessageContentQuoted {
-    #[async_recursion(?Send)]
-    async fn parse(
+    fn parse(
         &self,
         node: ParserAstNode,
         _line: i32,
@@ -272,8 +231,7 @@ impl MusicaParse for MessageContentQuoted {
 }
 
 impl MusicaParse for MessageContentUnquoted {
-    #[async_recursion(?Send)]
-    async fn parse(
+    fn parse(
         &self,
         node: ParserAstNode,
         _line: i32,
@@ -292,8 +250,7 @@ non_message_node!(INonMessage);
 
 // main rule for Musica
 impl MusicaParse for Musica {
-    #[async_recursion(?Send)]
-    async fn parse(
+    fn parse(
         &self,
         node: ParserAstNode,
         line: i32,
@@ -302,30 +259,22 @@ impl MusicaParse for Musica {
         let mut line = line;
         for node in node.into_inner() {
             let rule = node.as_rule();
-            let _ = rule
-                .parse(node, line, db.clone())
-                .await?
-                .into_any_result()?;
+            let _ = rule.parse(node, line, db.clone())?.into_any_result()?;
             line += 1;
         }
         Ok(None)
     }
 }
-
 #[anyhow_context]
-pub async fn parse_file(path: PathBuf, name: String) -> ParserResult<()> {
-    let db = text_segment::create_db_connection(&name).await?;
+pub fn parse_file(path: PathBuf, name: String) -> ParserResult<()> {
+    let db = block_on(text_segment::create_db_connection(&name))?;
 
-    // SAFETY: `content` will be used only once inside this function scope
-    let content = unsafe { trustme::ScopedStaticStr::new(read_to_string(path)?) };
-
-    let ast: ParserAst = MusicaParser::parse(Rule::Musica(Musica {}), content.as_static_str())?;
+    let content = read_to_string(path)?;
+    let ast: ParserAst = MusicaParser::parse(Rule::Musica(Musica {}), &content)?;
     let root: ParserAstNode = ast.peek().into_any_result()?;
     let rule = root.as_rule();
 
-    rule.parse(root, 0, db).await?;
-
-    // SAFETY: `content` will be dropped here and never used after drop
+    rule.parse(root, 0, db)?;
     Ok(())
 }
 
@@ -333,12 +282,13 @@ pub async fn parser_main(
     job: ParserJob,
     dispatch: Data<Arc<RwLock<DispatchJobQueue>>>,
 ) -> AnyResult<()> {
-    parse_file(job.file_path.clone(), job.file_name.clone()).await?;
+    let (path, name) = (job.file_path, job.file_name);
+    parse_file(path.clone(), name.clone())?;
     let mut dispatch = dispatch.write().await;
     dispatch
         .push(DispatchJob {
-            file_name: job.file_name,
-            file_path: job.file_path,
+            file_name: name,
+            file_path: path,
         })
         .await?;
     Ok(())
