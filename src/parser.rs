@@ -268,6 +268,7 @@ impl MusicaParse for Musica {
 #[anyhow_context]
 pub fn parse_file(path: PathBuf, name: String) -> ParserResult<()> {
     let db = block_on(text_segment::create_db_connection(&name))?;
+    block_on(text_segment::create_table(db.clone()))?;
 
     let content = read_to_string(path)?;
     let ast: ParserAst = MusicaParser::parse(Rule::Musica(Musica {}), &content)?;
