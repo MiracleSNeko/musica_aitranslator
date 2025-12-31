@@ -1,6 +1,15 @@
+use anyhow::Result as AnyResult;
+use apalis::prelude::{Data, Storage};
 use apalis_sql::sqlite::SqliteStorage;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
+use tokio::sync::RwLock;
+
+use crate::storage::{
+    TextSegmentColumn, TextSegmentEntity,
+    text_segment::{TextSegmentType, create_db_connection},
+};
 
 pub trait Job {
     const NAME: &'static str;
@@ -65,3 +74,31 @@ impl Job for DispatchJob {
 }
 
 pub type DispatchJobQueue = SqliteStorage<DispatchJob>;
+
+pub async fn dispatch_main(
+    job: DispatchJob,
+    analyzer: Data<Arc<RwLock<AnalyzerJobQueue>>>,
+    translator: Data<Arc<RwLock<TranslatorJobQueue>>>,
+) -> AnyResult<()> {
+    let (path, name) = (job.file_path, job.file_name);
+
+    {
+        let mut analyzer = analyzer.write().await;
+        analyzer
+            .push(AnalyzerJob {
+                file_name: name.clone(),
+                file_path: path.clone(),
+            })
+            .await?;
+    }
+    {
+        let mut translator = translator.write().await;
+        translator
+            .push(TranslatorJob {
+                file_name: name,
+                file_path: path,
+            })
+            .await?;
+    }
+    Ok(())
+}
