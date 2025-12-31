@@ -2,8 +2,10 @@ pub mod text_segment {
     use anyhow::{Context, Result as AnyResult, bail};
     use auto_context::auto_context as anyhow_context;
     use derive_builder::Builder;
-    use sea_orm::{ActiveValue::Set, IntoActiveModel, entity::prelude::*};
-    use sea_orm::{ConnectionTrait, Database, DatabaseConnection, Schema};
+    use sea_orm::{
+        ActiveValue::Set, ConnectionTrait, Database, DatabaseConnection, IntoActiveModel, Schema,
+        entity::prelude::*,
+    };
     use serde::{Deserialize, Serialize};
     use serde_json::json;
     use std::sync::Arc;
@@ -13,8 +15,19 @@ pub mod text_segment {
     pub struct Model {
         #[sea_orm(primary_key)]
         pub id: i32,
+        #[sea_orm(enum_name = "text_segment_type")]
+        pub segment_type: TextSegmentType,
         #[sea_orm(column_type = "JsonBinary")]
         pub content: Json,
+    }
+
+    #[derive(
+        Copy, Clone, Debug, PartialEq, Eq, EnumIter, Serialize, Deserialize, DeriveActiveEnum,
+    )]
+    #[sea_orm(rs_type = "i32", db_type = "Integer")]
+    pub enum TextSegmentType {
+        IMessage = 0,
+        INonMessage = 1,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -69,6 +82,10 @@ pub mod text_segment {
         fn from(insert_model: InsertModel) -> Self {
             let content = json!(insert_model);
             ActiveModel {
+                segment_type: match insert_model {
+                    InsertModel::IMessage(_) => Set(TextSegmentType::IMessage),
+                    InsertModel::INonMessage(_) => Set(TextSegmentType::INonMessage),
+                },
                 content: Set(content),
                 ..Default::default()
             }
@@ -79,6 +96,10 @@ pub mod text_segment {
         fn into_active_model(self) -> ActiveModel {
             let content = json!(self);
             ActiveModel {
+                segment_type: match self {
+                    InsertModel::IMessage(_) => Set(TextSegmentType::IMessage),
+                    InsertModel::INonMessage(_) => Set(TextSegmentType::INonMessage),
+                },
                 content: Set(content),
                 ..Default::default()
             }
@@ -104,6 +125,7 @@ pub mod text_segment {
                     name: merge_exclusive(self.name, other.name, "name")?,
                     tachie: merge_exclusive(self.tachie, other.tachie, "tachie")?,
                     content: merge_exclusive(self.content, other.content, "content")?,
+                    ..Default::default()
                 }),
             }
         }
@@ -131,6 +153,7 @@ pub mod text_segment {
                 InsertModelBuilder::INonMessage(other) => Ok(INonMessageModelBuilder {
                     line: merge_exclusive(self.line, other.line, "line")?,
                     content: merge_exclusive(self.content, other.content, "content")?,
+                    ..Default::default()
                 }),
             }
         }
@@ -187,3 +210,8 @@ pub mod text_segment {
         Ok(())
     }
 }
+
+pub use text_segment::{
+    Column as TextSegmentColumn, Entity as TextSegmentEntity, InsertModel as TextSegment,
+    InsertModelBuilder as TextSegmentBuilder, create_db_connection, create_table,
+};
