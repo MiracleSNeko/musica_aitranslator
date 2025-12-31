@@ -21,10 +21,10 @@ mod utils;
 use crate::{
     jobs::{
         AnalyzerJobQueue, AssemblerJobQueue, DispatchJob, DispatchJobQueue, Job, ParserJob,
-        ParserJobQueue, TranslatorJobQueue,
+        ParserJobQueue, TranslatorJobQueue, dispatch_main,
     },
     parser::*,
-    storage::text_segment::create_db_connection,
+    storage::create_db_connection,
 };
 
 lazy_static! {
@@ -69,9 +69,11 @@ async fn main() -> AnyResult<()> {
         })
         .register({
             WorkerBuilder::new(DispatchJob::NAME)
+                .data(Arc::new(RwLock::new(analyzer_jobs.clone())))
+                .data(Arc::new(RwLock::new(translator_jobs.clone())))
                 .concurrency(2)
                 .backend(dispatch_jobs)
-                .build_fn(|_| async move {})
+                .build_fn(dispatch_main)
         });
 
     Ok(())

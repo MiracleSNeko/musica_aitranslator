@@ -1,8 +1,6 @@
 use crate::{
     jobs::{DispatchJob, DispatchJobQueue, ParserJob},
-    storage::text_segment::{
-        self, InsertModel as TextSegment, InsertModelBuilder as TextSegmentBuilder,
-    },
+    storage::{create_db_connection, create_table, TextSegment, TextSegmentBuilder},
     utils::IntoAnyResult,
 };
 use anyhow::{Context, Result as AnyResult, bail};
@@ -267,8 +265,8 @@ impl MusicaParse for Musica {
 }
 #[anyhow_context]
 pub fn parse_file(path: PathBuf, name: String) -> ParserResult<()> {
-    let db = block_on(text_segment::create_db_connection(&name))?;
-    block_on(text_segment::create_table(db.clone()))?;
+    let db = block_on(create_db_connection(&name))?;
+    block_on(create_table(db.clone()))?;
 
     let content = read_to_string(path)?;
     let ast: ParserAst = MusicaParser::parse(Rule::Musica(Musica {}), &content)?;
